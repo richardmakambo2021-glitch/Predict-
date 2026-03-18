@@ -1,0 +1,25 @@
+name: Daily AI Prediction
+on:
+  schedule:
+    - cron: '0 8 * * *' # Runs at 8:00 AM UTC daily
+  workflow_dispatch: # Allows you to run it manually from your phone
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install requests pandas scikit-learn
+      - name: Run prediction
+        env:
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python predict.py
+        
