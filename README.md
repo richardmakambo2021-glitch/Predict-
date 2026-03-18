@@ -1,60 +1,43 @@
-# Predict.py
-import requests
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-import os
+def calculate_form(df):
+    # 1. Assign points based on the winner
+    def get_pts(row, team_id):
+        if row['score.winner'] == 'DRAW': return 1
+        if (row['score.winner'] == 'HOME_TEAM' and row['homeTeam.id'] == team_id) or \
+           (row['score.winner'] == 'AWAY_TEAM' and row['awayTeam.id'] == team_id):
+            return 3
+        return 0
 
-# 1. SETUP - These will be stored securely in GitHub Secrets
-API_KEY = os.getenv('FOOTBALL_DATA_API_KEY')
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-
-def get_data():
-    # Fetching recent match results (Example: English Premier League)
-    url = "https://api.football-data.org/v4/competitions/PL/matches"
-    headers = {'X-Auth-Token': API_KEY}
-    response = requests.get(url, headers=headers).json()
-    return response['matches']
+    # 2. Create a "Form" column for each team
+    # This part groups by team and calculates the average points of the last 5 games
+    df = df.sort_values('utcDate')
+    
+    # We calculate home_form and away_form separately
+    df['home_pts'] = df.apply(lambda x: get_pts(x, x['homeTeam.id']), axis=1)
+    df['away_pts'] = df.apply(lambda x: get_pts(x, x['awayTeam.id']), axis=1)
+    
+    # Rolling average of the last 5 games
+    df['home_form'] = df.groupby('homeTeam.id')['home_pts'].transform(lambda x: x.shift().rolling(5).mean())
+    df['away_form'] = df.groupby('awayTeam.id')['away_pts'].transform(lambda x: x.shift().rolling(5).mean())
+    
+    return df.fillna(0) # Fill early season games (where no 5-game history exists) with 0
 
 def train_and_predict():
-    data = get_data()
-    df = pd.json_normalize(data)
+    raw_data = get_data()
+    df = pd.json_normalize(raw_data)
     
-    # Simple Feature Engineering: Convert wins/losses to numbers
-    # 0 = Draw, 1 = Home Win, 2 = Away Win
+    # Apply our new Form logic
+    df = calculate_form(df)
+    
     df['target'] = df['score.winner'].map({'HOME_TEAM': 1, 'AWAY_TEAM': 2, 'DRAW': 0})
-    
-    # We filter for completed matches to train the AI
     train_df = df[df['status'] == 'FINISHED'].dropna(subset=['target'])
     
-    # Features: Using Home/Away Team IDs as basic indicators
-    X = train_df[['homeTeam.id', 'awayTeam.id']]
+    # NEW: We now include 'home_form' and 'away_form' as inputs!
+    features = ['homeTeam.id', 'awayTeam.id', 'home_form', 'away_form']
+    X = train_df[features]
     y = train_df['target']
     
-    model = RandomForestClassifier(n_estimators=100)
+    model = RandomForestClassifier(n_estimators=200) # Increased trees for better precision
     model.fit(X, y)
     
-    # Predict upcoming matches
-    upcoming = df[df['status'] == 'TIMED']
-    if not upcoming.empty:
-        predictions = model.predict(upcoming[['homeTeam.id', 'awayTeam.id']])
-        probs = model.predict_proba(upcoming[['homeTeam.id', 'awayTeam.id']])
-        
-        message = "🤖 AI PREDICTIONS FOR TODAY:\n"
-        for i, pred in enumerate(predictions):
-            confidence = max(probs[i]) * 100
-            if confidence > 70:  # Only alert if confidence is high
-                home = upcoming.iloc[i]['homeTeam.name']
-                away = upcoming.iloc[i]['awayTeam.name']
-                res = "Home Win" if pred == 1 else "Away Win" if pred == 2 else "Draw"
-                message += f"⚽ {home} vs {away}: {res} ({confidence:.1f}%)\n"
-        
-        send_telegram(message)
-
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={text}"
-    requests.get(url)
-
-if __name__ == "__main__":
-    train_and_predict()
+    # ... rest of the prediction and Telegram logic remains the same
     
